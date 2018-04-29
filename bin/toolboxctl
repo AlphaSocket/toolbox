@@ -1,0 +1,154 @@
+#!/bin/bash
+#
+# Manage Toolbox (CLI container)
+#
+# SG: https://google.github.io/styleguide/shell.xml
+# https://docs.google.com/document/d/1gkRfW2xCWA9UhpciJWWeRtMX0F125mz9-ceF6kRrhJo/edit#
+#
+
+set -e
+
+USER_ID=$(id -u)
+GROUP_ID=$(id -g)
+
+PRIVILIGED=0
+CONTAINER_NAME="toolbox"
+CONTAINER_IMAGE="alphasocket/toolbox-alpine:latest"
+CONTAINER_COMMAND="sleep 999999"
+
+# Globals
+log() {
+  echo -ne "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $@\n" >&1
+}
+
+err() {
+  echo -ne "[$(date +'%Y-%m-%dT%H:%M:%S%z')]: $@\n" >&2
+}
+
+initialize(){
+    if [ -z $( which docker ) ]; then
+        err "Docker client not found"
+        exit 1
+    fi
+}
+
+destroy(){
+    exit 0
+}
+
+#
+#
+#
+
+pull_image(){
+	docker pull $CONTAINER_IMAGE
+}
+
+init_container(){
+    docker rm "$CONTAINER_NAME" --force &> /dev/null || true 
+    pull_image
+	[[ $PRIVILIGED = 1 ]] && CONTAINER_USER="--privileged" || CONTAINER_USER="-u $USER_ID:$GROUP_ID"
+	docker run $CONTAINER_MODE $CONTAINER_USER --name "$CONTAINER_NAME" --net host -v $HOME:$HOME -e HOME=$HOME -w $HOME $CONTAINER_IMAGE "$CONTAINER_COMMAND"
+}
+
+start_daemon(){
+	CONTAINER_MODE="-d"
+	init_container
+}
+
+exec_command(){
+    if [ $RUNNING = 0 ]; then
+        start_daemon
+    fi
+    
+	CONTAINER_MODE="-it"
+    docker exec $CONTAINER_MODE $CONTAINER_NAME $@
+    
+    if [ $RUNNING = 0 ]; then
+        stop_container
+    fi
+}
+
+run_container(){
+	CONTAINER_COMMAND="bash"
+	exec_command $CONTAINER_COMMAND
+}
+
+status_container(){
+	docker ps -f "name=$CONTAINER_NAME"
+}
+
+stop_container(){
+	docker stop -t 0 $CONTAINER_NAME
+}
+
+kill_container(){
+	docker kill $CONTAINER_NAME
+}
+
+main(){
+    initialize
+    
+    if [ $(docker ps -f "name=$CONTAINER_NAME" --format '{{.Names}}' | grep -c $CONTAINER_NAME ) = 1 ] ; then
+        RUNNING=1
+    else
+        RUNNING=0
+    fi
+
+	case "$1" in
+        start)
+            if [ $RUNNING = 1 ]; then
+                log "Toolbox already running"
+            else
+                start_daemon
+                log "Toolbox started"
+            fi
+            ;;
+        restart)
+            start_daemon
+            log "Toolbox started"
+            ;;
+        run)
+            run_container
+            ;;
+        status)
+            if [ $RUNNING = 1 ]; then
+                status_container
+            else
+                log "Toolbox not running"
+            fi
+            ;;
+        stop)
+            if [ $RUNNING = 1 ]; then
+                stop_container
+            else
+                err "Toolbox not running"
+                exit 1
+            fi
+            ;;
+        kill)
+            if [ $RUNNING = 1 ]; then
+                kill_container
+            else
+                err "Toolbox not running"
+                exit 1
+            fi
+            ;;
+        exec)
+            shift
+            exec_command $@
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "Action not recognized"
+            exit 64
+            ;;
+    esac
+    
+    destroy
+}
+
+main $@
